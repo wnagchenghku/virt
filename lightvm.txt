@@ -56,3 +56,23 @@ forkbomb: fork炸弹以极快的速度创建大量进程（进程数呈以2为�
 
 
 All containers share the kernel and its API. Kernel API are difficult to secure. One container uses the system call which is not protected securely, the whole system is in danger.
+
+7. Use cases of of lightvm
+
+There are a bunch of cells connected to the core network. Cells connected to the mobile devices.
+
+Let's take some processing close to the cells (mobile edge cloud). We can offload some functionality from the mobile to the cells. Everything you offload has its own functionality.
+
+One firewall for each mobile in the cell
+
+The Mobile Edge Computing is an ideal place to instantiate personal firewalls for mobile users. The difficulty is that the amount of deployed hardware at any single cell is very limited (one or a few machines), while the number of active users in the cell is on the order of a few thousand. Moreover, users enter and leave the cell continuously, so it is critical to be able to instantiate, terminate and migrate personal firewalls quickly and cheaply, following the user through the mobile network.
+
+we can run as many as 8000 such firewalls on our 64-core AMD machine.
+
+8. migration in lightvm
+
+With this in place, migration begins by chaos opening a TCP connection to a migration daemon running on the remote host and by sending the guest’s configuration so that the daemon pre-creates the domain and creates the devices.
+
+Next, to suspend the guest, chaos issues an ioctl to the sysctl back-end, which will set a field in the shared page to denote that the shutdown reason is suspend, and triggers the event channel. The front-end will receive the request to shutdown, upon which the guest will save its internal state and unbind noxs-related event channels and device pages.
+
+Once the guest is suspended we rely on libxc code to send the guest data to the remote host.

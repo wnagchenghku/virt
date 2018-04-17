@@ -164,3 +164,76 @@ I/O rings that are used to transfer a lot of data might be polled on both ends.
 Those that are used more infrequently use the event mechanism to signal that
 data is available.
 
+#### The Split Driver Model
+
+The XenStore itself is implemented as a split device. The location of the page
+used to communicate is given as a machine frame number in the start info page.
+This is slightly different to other devices, in that the page is made available to the guest before the system starts, rather than being exported via the grant table mechanism and advertised in the XenStore.
+
+
+#### Handling Notifications from Events
+
+Xen provides an analog of this in the form of event channels. These are de-
+livered asynchronously to guests and, unlike interrupts, are enqueued when the
+guest is not running. Interrupts, conventionally, are not aware of the existence of virtual machines and so are delivered immediately.
+
+When a driver needs to notify a device of some waiting data, it typically
+writes to a control register. Within Xen, the event mechanism also replaces this
+for notifying the back end of a split device driver, because both directions are an example of interdomain communication.
+
+#### Configuring via the XenStore
+
+Among other things, the XenStore is the Xen equivalent of an OpenFirmware
+device tree, or the results of querying an external bus. It provides a central
+location for retrieving information about devices that are available to the domain. The XenStore is, itself, a device, and so must be bootstrapped using information from the start info page.
+
+The XenStore provides an abstract way of discovering information about de-
+vices, and about other aspects of the system. It is one of the first devices that must be supported, because it allows the information required for other devices to be found.
+
+The XenStore is a simple hierarchical namespace containing strings.
+
+#### The Console Device
+After putting data in the buffer, we need to signal the back end to remove
+it and display it. This is done via the event channel mechanism. Events will be
+discussed in detail in the next chapter, including how to handle incoming ones. For now, we will just signal the event channel, and look at what is actually happening in the next chapter.
+
+Signaling the event channel is fairly simple, and can be thought of in the same
+way as sending a UNIX signal. The console evtchn variable holds the number of
+the event channel being used for the console. This is similar to the signal number in UNIX, but is decided at runtime, rather than compile time. Note that sending an event after each character has been placed into the ring is highly inefficient. It is more efficient to only send an event at the end of sending, or when the buffer is full. This is left as an exercise for the reader.
+
+To issue the signal, we use the HYPERVISOR event channel op hypercall. The
+command we give to this tells it to send the event, and the control structure takes a single argument, indicating the event channel to be signaled.
+
+#### Looking through the XenStore
+
+The XenStore is a storage system shared between Xen guests. It is a simple hierarchical storage system, maintained by Domain 0 and accessed via a shared memory page and an event channel. Although the XenStore is fairly central to the operation of a Xen system, there are no hypercalls associated with it. The start info page contains the address of the shared memory page used to communicate with the store. A guest maps this page and then all further communication happens via the ring buffers in this page.
+
+Unlike most filesystems, the XenStore supports a transactional model for I/O.
+Groups of requests can be bundled into a transaction, assuring that they will
+complete atomically. This allows consistent views of the store (or some subtree)
+to be easily created.
+
+##### From the kernel
+A guest kernel can interact with the XenStore with a similar degree of control. The XenStore, like most other devices, is interacted with via a shared memory page and an event channel. In implementation, it is similar to the console device. Unlike other devices, which retrieve their configuration information from the XenStore, the store has its page mapped into the guest’s address space and the event channel connected on system boot.
+
+The two pieces of information required to begin using the XenStore are found in
+the start info page, in the store_mfn and store_evtchn fields. The first of these gives the machine frame number of the shared memory page containing the XenStore ring buffer. This must be converted to a virtual address before it can be used. The other is the event channel. A handler should be configured for this, as discussed in the last chapter.
+
+The XenStore is very similar, in terms of interface, to the console device.
+Both are mapped into the new domain’s address space by the domain builder,
+and have their event channels assigned at boot time. Both have two rings, one for requests and the other for responses, and producer/consumer counters for each in the shared ring. Both mainly deal with text.
+
+Setting up the XenStore device, as with the console, is simply a matter of
+getting the pseudo-physical address of the shared page and keeping this as a
+pointer. After that, an event handler should be set up for retrieving asynchronous responses, both from requests and from watches.
+
+Most of our interactions with the store require writing a message into the
+buffer and signaling the back end.
+
+This example first required writing a key, so we’ll implement that first. The
+basic process for doing this can be viewed as follows:
+1. Prepare the message header.
+2. Send the header.
+3. Send the (key, value) pair.
+4. Signal the event channel.
+5. Read the response.
