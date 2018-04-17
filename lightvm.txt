@@ -1,0 +1,58 @@
+﻿1. lightvm can greatly benefit our VM fault tolerance system PLOVER.
+
+
+lightvm can benefit the memory footprint in PLOVER. The background processes in kernel can contribute around one thousand dirty memory pages in virtual machine. With lightvm, this part of memory footprint can be further reduced.
+
+
+Besides, I think the fast pause/resume of lightvm is an exciting feature to PLOVER. We found the basic virtual machine fault tolerance system carried in QEMU spends a lot of time pausing the VM, and the reason is when QEMU issues vcpu related system calls, the KVM code in kernel will always do the operation of tracking the pid of the task that runs the vcpu first and this causes time cost due to synchronization if one CPU is modified by another CPU. Since kernel tracks the pid only for the purpose of yielding, so actually we only need to track the pid only when QEMU issues the vcpu running system call (KVM_SET_REGS, KVM_RUN).
+
+
+This bug has been fixed on ubuntu 16, but we were using ubuntu 14. Therefore, it takes us a lot of time to find the root cause. With lightvm, I think this kind of problem can be mitigated.
+
+
+2. What do you know about Xen?
+
+
+I have only played with the Xen fault tolerance systems including  COLO, which is a virtual machine fault tolerance system developed by Huawei, and Remus. So, I am quite familiar with the virtual machine migration protocol in Xen, but for the internal mechanism of Xen, I may need to have a deep understanding. And that's why I applied for your internship because I am expecting to have a deeper understanding on virtualization technology.
+
+
+3. Tell me about your research.
+
+
+I was previously working on virtual machine fault tolerance systems, PLOVER. PLOVER can efficiently replicate virtual machine with strong fault tolerance guarantee. Specifically, it models the virtual machine as state machine by running the primary virtual machine and backup virtual machine in parallel and ensuring both virtual machines receive the same total order of network inputs.
+
+
+Because the primary and backup run the same code, receive the same network inputs, their memory states should be almost the same and accordingly the amount of data to be transferred for memory state synchronization is very small.
+
+
+To achieve strong fault tolerance guarantee, it adds a witness machine to form a Paxos group.
+
+
+The main idea is what I have mentioned above. But there are some practical challenges in PLOVER, like how to achieve network input consensus in the hypervisor without hurting the virtual machine's performance and how to maximize the same dirty memory pages between two VMs, etc.
+
+
+4. Why do you apply for NEC
+
+
+I applied for NEC for two reasons. I was attracted by the great works like lightvm at the top conferences. I was previously working the virtual machine fault tolerance projects, but with the focus on virtual machine migration technologies and distributed consensus protocols which are mainly on top of the virtual machine itself, therefore I am expecting to come to NEC Europe to get a deeper understanding on the internal mechanism of virtual machine.
+
+
+The second reason is that I am actually planning the whole career of my life. I spent half a year working as an intern in Hamburg three years ago, and I really enjoyed that time. After that I have made up my mind to immigrate to Germany and find a job there after graduation. So if I am qualified, I will join NEC as a researcher after my graduation.
+
+
+5. Duration of internship
+
+
+I think this is really negotiable. I have told this internship to my supervisor and he really values this opportunity and wants me to go there. He said if I am working on like an NSDI or Eurosys paper whose deadlines are in September or October, then my internship duration can be extended to the end of October.
+
+
+6. container is less isolated than VM
+
+
+To complicate things matter, any container that can monopolize or exhaust system resources (e.g., memory, file descriptors, user IDs, forkbombs) will cause a DoS attack on all other containers on that host.
+
+
+forkbomb: fork炸弹以极快的速度创建大量进程（进程数呈以2为底数的指数增长趋势），并以此消耗系统分配予进程的可用空间使进程表饱和，而系统在进程表饱和后就无法运行新程序，除非进程表中的某一进程终止；但由于fork炸弹程序所创建的所有实例都会不断探测空缺的进程槽并尝试取用以创建新进程，因而即使在某进程终止后也基本不可能运行新进程。fork炸弹生成的子程序在消耗进程表空间的同时也会占用CPU和内存，从而导致系统与现有进程运行速度放缓，响应时间也会随之大幅增加，以致于无法正常完成任务，从而使系统的正常运作受到严重影响。
+
+
+All containers share the kernel and its API. Kernel API are difficult to secure. One container uses the system call which is not protected securely, the whole system is in danger.
