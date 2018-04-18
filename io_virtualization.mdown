@@ -1,0 +1,152 @@
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-MML-AM_CHTML">
+</script>
+
+### Physical I/O
+#### Discovering and Interacting with I/O devices
+Upon startup, at boot time, the operating system kernel must somehow figure out which devices are available in the physical machine. The exact way to obtain this goal is nontrivial; it varies and depends on several factors, but typically it involves the Basic Input/Output System (BIOS) firmware, or its successor, the Unified Extensible Firmware Interface (UEFI). The firmware (BIOS or UEFI) then provides a description of the available devices in some standard format, such as the one dictated by the Advanced Configuration and Power Interface (ACPI). In 6.2.3, we provide a detailed example of how PCIe devices are discovered. Generally speaking, however, the device discovery process requires the host OS to query the physical firmware/hardware.
+
+**PIO and MMIO:** Port-mapped I/O (PIO) and memory-mapped I/O (MMIO) provide the most basic method for CPUs to interact with I/O devices. The BIOS or UEFI associate the registers of the I/O devices with unique dedicated addresses. The CPU often use these addresses to implement control channels, namely to send commands to the I/O devices and then to receive the corresponding statuses by polling the appropriate registers for reading.
+
+Address of PIO - called "ports" - are separated from the memory address space and have their own dedicated physical bus. Such addresses are typically limited to 16 bits. They are used via the special OUT and IN x86 instructions, which write/read 1-4 bytes to/from the I/O devices. The addresses are usually known and set by hardware vendors; for example, ports 0x0060-0x0064 are used to read from and send commands to keyboards and mice with PC/2 connectors.
+
+MMIO is similar, but the device registers are associated with memory address, and they are referred to using regular load and store x86 operations through the memory bus. The association between device registers and memory addresses is predetermined on startup. The host bridge controller and memory controller are aware of these associations and route data accordingly.
+
+#### Driving Devices through Ring Buffers
+I/O devices, such as PCIe solid state drives (SSDs) and network controller (NICs), can deliver high throughput rates. For example, as of this writing, devices that deliver 10-100 Gbit/s are a commodity. To understand how such high-throughput devices are virtualized, it would be helpful to understand how they work. Overwhelmingly, these devices stream their I/O through one or more producer/consumer ring buffers. A ring is a memory array shared between the OS device driver and the associated device, as illustrated in Figure 6.4. The ring is circular in that the device and driver wrap around to the beginning of the array when they reach its end. The entries in the ring are DMA descriptors. Their exact format and content may vary between I/O devices, but they typically specify at least the address and size of the corresponding DMA target buffers - the memory areas used by the device DMAs to write/read incoming/outgoing data. The descriptors also commonly contain status bits that help the driver and the device to synchronize.
+
+![High-throughput I/O devices typically use a ring buffer to communicate with their OS device driver. The shaded area marks the range of DMA descriptors currently accessible to the device. Each entry points to a DMA target buffer. The device will write incoming data into DMA target buffers or read outgoing data from DMA target buffers, depending on the direction of the DMA.](ring_buffer.png)
+
+Devices must also know the direction of each requested DMA, namely, whether the data should be transmitted from memory (into the device) or received (from the device) into memory. The direction can be specified in the descriptor, as is typical for disk drives, or the device can employ different rings for receive and transmit activity, as is typical of NICs. (In the latter case, the direction is implied by the ring.) The NIC receive and transmit rings are denoted as Rx and Tx, respectively.
+
+Upon initialization, the OS device driver allocates the rings and configures the I/O device with the ring sizes and base locations. For each ring, the device and driver utilize a head and a tail pointers to delimit the ring content that can be used by the device: \\( [head,tail) \\) . The base, size, head, and tail registers of the device ring are accessible to the OS driver via MMIO. The device iteratively consumes (removes) descriptors from the head, and it increments the head to point to the next descriptor to be used subsequently. Similarly, the driver adds descriptors to the tail, incrementing the tail to point to the entry that it will use subsequently. The Rx ring is full during a period of I/O inactivity, The Tx ring is empty during a period of I/O inactivity. The device and driver may distinguish between emptiness and fullness - when head and tail point to the same location in Figure 6.4. - using the aforementioned descriptor status bits; for example, "produced" and "consumed" bits that are set by the driver and the device, respectively.
+
+To illustrate, assume the OS wants to transmit two packets after a period of network inactivity. Initially, the Tx head and tail point to the same descriptor \\( k \\), signifying (with status bits) that Tx is empty. The OS driver sets the \\( k \\) and \\( k+1 \\) descriptors to point to the two packets, turns on their "produced" bits, and lets the NIC know that new packets are pending by updating the tail register to point to \\( k+2 \\) (modulo \\( N \\)). The NIC sequentially processes the packets, beginning at the head (\\( k \\)), which is incremented until it reach the tail (\\( k+2 \\)). With Tx, the head always "chases" the tail throughout the execution, meaning the NIC tries to send the packets as fast as it can.
+
+The device asynchronously informs its OS driver that data was transmitted or receives by triggering an interrupt. The device coalesces interrupts when their rate is high. Upon receiving an interrupt, the driver for a high-throughput device handles the I/O burst. Namely, it sequentially iterates through and processes all the descriptors whose corresponding DMAs have completed. In the case of Rx, for example, processing includes handling the received packets to the TCP/IP stack and rearming the Rx ring with new buffers.
+
+#### PCIe
+![PCIe topology.](PCIe_tree.png)
+
+**Hierarchy:** Endpoints correspond to individual I/O channels in physical NICs devices; for example, a dual-port NIC has two endpoints - one per port.
+
+**Node Enumeration:** Every PCIe function (node) and PCIe bus (edge) in the PCIe graph is uniquely identified. Let N be a PCIe node in the tree. N's identifier is a 16-bit number in the form of `bus:device:function` (BDF), such that `bus`, `device`, and `function` consist of 8, 5, and 3 bits.
+
+**Configuration Space:** As notes in 6.2.1, on startup, the OS typically discovers the system's I/O devices by using the BIOS/UEFI firmware, which provides device information via some standard format like ACPI tables. For PCIe devices, discovery involves the PCIe configuration space array, as depicted in Figure 6.6. This array is accessible to the OS via MMIO operations. Later on, when we virtualize the OS, we will need to simulate this array for the VM.
+
+The OS can find the array's address and size in the standard "MCFG" ACPI table (Figure 6.6a). In our example, MCFG indicates that the array should include an entry for every valid BDF. Since there are 64 KB such BDFs, and since PCIe specifies that the per-BDF configuration space size is 4 KB, then the array size is (64 KB x 4 KB =) 256 MB. The configuration space associated with a given BDF can be found by adding 4KB x BDF to the address of the array.
+
+The 4KB configuration space of a PCIe node identified by BDF consists of three parts (Figure 6.6c). The first 256 bytes constitute a valid PCI (rather than PCIe) configuration space, for backward compatibility (PCIe superseded PCI). Of these, the first 64 bytes constitutes the header (Figure 6.6d), which identifies such attributes as the functional class of the device (network, storage, etc.), the vendor ID (assigned by PCI-SIG), and the device ID (assigned by the vendor). These attributes allow the OS t identify the devices, associate them with appropriate drivers, initialize them, and make them available for general use.
+
+![PCIe configuration.](PCIe_configuration.png)
+
+Each endpoint can have up to six Base Address Registers (BARs), which publicize the MMIO (or PIO) addresses to be used when the OS wishes to interact with the device - the locations where device registers are found. For example, in the device depicted in Figure 6.4, corresponding configuration space BARs will specify where to find the head, tail, base, and size registers. The exact semantics of the areas pointed to by the BARs are determined by the manufactures of the devices.
+
+**MSI:** So far, we considered two address space types for I/O: port-mapped (PIO) and memory-mapped (MMIO).
+
+### Virtual I/O without Hardware Support
+The hypervisor achieves this goal by trapping all the guest's I/O related operations and by emulating them to achieve the desired effect.
+
+#### I/O Emulation (Full Virtualization)
+
+By utilizing the emulation technique we just described, the hypervisor can decide which set of virtual I/O devices to expose to the guest. Figure 6.8 lists the set of PCI devices exposed to a typical Linux virtual machine hosted by QEMU/KVM. The figure shows the output of the `lspci` shell utility when invoked inside the VM (`lspci` prints the configuration space hierarchy depicted in Figure 6.6). Different than a bare-metal OS, the guest's `lspci` does not read the real ACPI tables and configuration space that were established by the real BIOS/UEFI firmware. Instead, it reads the content of an emulated ACPI tables and configuration space, as generated by an emulated BIOS/UEFI. We can see that, by default, QEMU emulates the Intel 440FX host bridge controller as the root of the BDF hierarchy (`00:0.0`). In this hierarchy, we can further see that QEMU emulates two NICs for this VM: Intel's 82540EM Gigabit Ethernet Controller (`00:03.0`) and Red Hat's Virtio network device (`00:04.0`). Next, we discuss the emulated Intel NIC, to give one concrete example of how I/O emulation works for a specific device.
+
+```
+# Output of the lspci shell command executed within a typical Linux VM, which is running on top of the KVM/QEMU hypervisor
+
+00:00.0 Host bridge: Intel Corporation 440FX - 82441FX PMC [Natoma] (rev 02)
+00:01.0 ISA bridge: Intel Corporation 82371SB PIIX3 ISA [Natoma/Triton II]
+00:01.1 IDE interface: Intel Corporation 82371SB PIIX3 IDE [Natoma/Triton II]
+00:01.3 Bridge: Intel Corporation 82371AB/EB/MB PIIX4 ACPI (rev 03)
+00:02.0 VGA compatible controller: Device 1234:1111 (rev 02)
+00:03.0 Ethernet controller: Intel Corporation 82540EM Gigabit Ethernet
+00:04.0 Ethernet controller: Red Hat, Inc Virtio network device
+00:05.0 SCSI storage controller: Red Hat, Inc Virtio block device
+```
+
+```
+# Partial lspci output for the emulated Intel NIC, identifying its guest driver as e1000, and revealing its MMIO BAR addresses (0xfebc0000) as specified in its emulated configuration space.
+
+00:03.0 Ethernet controller: Intel Corporation 82540EM Gigabit Ethernet
+        Flags: bus master, fast devsel, latency 0, IRQ 11
+        Memory at febc0000 (32-bit, non-prefetchable) [size=128K]
+        I/O ports at c000 [size=64]
+        Expansion ROM at feb40000 [disabled] [size=256K]
+        Kernel driver in use: e1000
+```
+
+**e1000:** The 82540EM NIC corresponds to an old network controller that was launched by the Intel in 2002 and has since been superseded by multiple generations of newer models. Naturally, our physical host machine does not have this NIC (it is equipped with a newer model by a different vendor). The NIC's physical absence is not an issue, however, as it is emulated purely by software. In fact, the 82540EM is so old that it predates PICe and only supports PCI. But this too is not a issue (regardless of PCIe being backward compatible with PCI), because QEMU exposes the BDF hierarchy as PCI in any case. That is, the emulated `00:00.0` Intel 440FX host bridge (root of BDF hierarchy) is a PCI- rather than PCIe-to-host bridge. Since the bridge is emulated by software, it does not matter that the underlying physical I/O system uses the newer PCIe fabric.
+
+The 82540EM model of the emulated Intel NIC is not particularly special or important in any sense. What is important is for the VM to have an appropriate driver for the hypervisor to match with its own network emulation layer, such that these two software components would be compatible. Using the `lspci` utility, we can print detailed configuration space and other information of PCI devices. Figure 6.9 shows some of this information for our emulated Intel NIC. The last line indicates that the guest kernel driver associated with this NIC is e1000. The latter is the name of a legacy Intel driver that ships by default with all prevalent OSes, and has been shipping with them for years. As such, all prevalent hypervisors rely on presence of e1000 in guest OSes to provide default networking capabilities, utilizing it as the de-facto standard for network emulation. The e1000 driver supports the family of Intel's PCI/PCI-X Gigabit Ethernet NICs (the 82540EM is simply a member of this family).
+
+Table 6.1 lists some of the central registers used by the e1000 driver. The receive and transmit categories directly correspond to the base, size, head, and tail registers of the Rx and Tx rings, as described in 6.2.2. When the guest attempts to access a register, KVM suspends it and resumes QEMU host context, providing it with the register's address and a description of the attempted operation. QEMU then responds appropriately based on the NIC specification. By faithfully adhering to this specification, and by using the same BAR, the emulation layer behaves exactly as the guest e1000 driver expects and produces an outcome identical to a functionally-equivalent physical NIC.
+
+```
+ ---------------------------------------------------------------------------------------------
+| Category | Name   | Abbreviates                      | Offset  | Description                |
+ ---------------------------------------------------------------------------------------------
+| receive  | RDBAH  | receive descriptor base address  | 0x02800 | base address of Rx ring    |
+|          | RDLEN  | receive descriptor length        | 0x02808 | Rx ring size               |
+|          | RDH    | receive descriptor head          | 0x02810 | pointer to head of Rx ring |
+|          | RDT    | receive descriptor tail          | 0x02818 | pointer to tail of Rx ring |
+ ---------------------------------------------------------------------------------------------
+| transmit | TDBAH  | transmit descriptor base address | 0x03800 | base address of Tx ring    |
+|          | TDLEN  | transmit descriptor length       | 0x03808 | Tx ring size               |
+|          | TDH    | transmit descriptor head         | 0x03810 | pointer to head of Tx ring |
+|          | TDT    | transmit descriptor tail         | 0x03818 | pointer to tail of Tx ring |
+ ---------------------------------------------------------------------------------------------
+| other    | STATUS | status                           | 0x00008 | current device status      |
+|          | RDLEN  | interrupt cause read             | 0x000C0 | bitmap of causes           |
+|          | RDH    | interrupt mask set               | 0x000D0 | enable interrupts          |
+|          | RDT    | interrupt mask clear             | 0x000D8 | disable interrupts         |
+ --------------------------------------------------------------------------------------------
+```
+
+The QEMU e1000 emulation layer (file `hw/net/e1000.c` in the QEMU codebase) implements the NIC registers by utilizing an array named `mac_reg`. According to the NIC specification, for example, the ICR register (which specifies the reason for the last interrupt) is cleared upon a read. Thus, when the guest reads the emulated ICR, the read operation triggers an exit, which transfers control to KVM, which resumes the host context of QEMU, which analyses the instruction that triggered the exit and consequently invokes the `mac_icr_read` routine. The code of `mac_icr_read` is listed in Figure 6.10. As can be seen, the emulation layer correctly emulates the NIC's specification by first saving the ICR value into a local variable, zeroing the register, and only then returning the previous value.
+
+```
+static uint32_t mac_icr_read(E1000State *s)
+{
+    uint32_t ret = s->mac_reg[ICR];
+    s->mac_reg[ICR] = 0;
+    return ret;
+}
+```
+
+#### I/O Paravirtualization
+While I/O emulation implements a correct behavior, it might induce substantial performance overheads, because efficient emulation was not recognized as a desirable feature when the physical device was designed. It is probably safe to assume that the original designers of the Intel 82540EM Gigabit Ethernet Controller were not aware of the possibility that this device will be routinely virtualized, let alone that its interface would become the de-facto standard for network virtualization. Indeed, sending/receiving a single Ethernet frame via e1000 involves multiple register accesses, which translate to multiple exits per frame in virtualized setups.
+
+The difference if that the specification of this virtual device is defined with virtualization in mind, so as to minimize the number of exits. Such a device is said to be paravirtual (rather than fully virtual), as it makes the guest "aware" that it is being virtualized: the guest must install a special device driver that it only compatible with its hypervisor, not with any real physical hardware.
+
+I/O paravirtualization offers substantial performance improvement for some workload as compared to I/O emulation. But there are also disadvantages. As noted, paravirtualization oftentimes requires that guest OS administrators install the paravirtual drivers.
+
+**virtio:** The framework of paravirtual I/O devices of KVM/QEMU is called virtio, offering a common guest-interface and communication mechanism. As usual, each paravirtual device driver (top of the figure) corresponds to a matching emulation layer in the QEMU part of the hypervisor (bottom). Despite being paravirtual, virtio devices are exposed to guests like nay other physical/emulated device and thus require no special treatment in terms of discovery and initialization. For example, in Figure 6.8, the BDF `00:04.0` is associated with a virtio-bet NIC. The configuration space information of this NIC reveals all the data that is required in order to use this NIC, for example, the location of its Rx and Tx rings and their registers.
+
+The central construct of virtio if virtqueue, which is essentially a ring (Figure 6.4) where buffers are posted by the guest to be consumed by the host. Emulated devices are inefficient largely because every MMIO/PIO access implicitly trigger an exit. In contrast, guests that use virtqueues never trigger exits unless they consciously intend to do so, by invoking the `virtqueue_kick` function, to explicitly let the hypervisor know that they require service. By minimizing the number of kicks, guests reduce exit overheads and increase batching.
+
+In addition to the ring, each virtqueue is associated with two modes of execution that assist the guest and host to further reduce the number of interrupts and exits.
+
+Symmetrically, when the host turns on the `NO_NOTIFY` mode, it informs the guest to refrain from kicking it. The host emulation side of virtio-net routinely uses this execution mode, because TCP traffic tends to be bursty. That is, packets and frames often show up together, in bursts. Thus, when a burst of frames if sent by the guest, the host only needs the first kick. It then know that it should start processing the ring, which is done iteratively within a loop until no more frames are left to process. While iterating, the host needs no additional kicks. Hence, it turn `NO_NOTIFY` on until the end of the loop and thereby minimizes virtualization overheads.
+
+![virtio.](virtio.png)
+
+Efficiently virtualizing the network is challenging, because of the staggering the throughput that modern NICs deliver, easily generating millions of packets per second, which the CPU needs to handle. For this reason, the KVM/QEMU hypervisor makes an exception for paravirtual networking. In addition to virtio-net, it also supports vhost-net, which breaks the traditional design of having the emulation layer entirely contained within QEMU - the userland part of the hypervisor. Vhost-net provides the same functionality as virtio-net, but instead of forwarding all the I/O events to QEMU, it handles much of the packet processing in the Linux kernel. In doing so, vhost-net nearly halves the number of context switches. Namely, virtio-net repeatedly context-switches between guest context and QEMU context via KVM (Figure 6.7), whereas vhost-net usually returns to guest context directly from KVM, without going through QEMU.
+
+> ## Vhost overview
+>
+> The vhost drivers in Linux provide in-kernel virtio device emulation. Normally the QEMU userspace process emulates I/O accesses from the guest. Vhost puts virtio emulation code into the kernel, taking QEMU userspace out of the picture. This allows device emulation code to directly call into kernel subsystems instead of performing system calls from userspace.
+> ## The vhost driver model
+>
+> These are necessary to associate the QEMU process with the vhost-net instance, prepare for virtio feature negotiation, and pass the guest physical memory mapping to the vhost-net driver.
+>
+> During initialization the vhost driver creates a kernel thread called vhost-$pid, where $pid is the QEMU process pid. This thread is called the "vhost worker thread". The job of the worker thread is to handle I/O events and perform the device emulation.
+> 
+> ## In-kernel virtio emulation
+>
+> This means a vhost driver is not a self-contained virtio device implementation, it depends on userspace to handle the control plane while the data plane is done in-kernel.
+>
+> The vhost worker thread waits for virtqueue kicks and then handles buffers that have been placed on the virtqueue. In vhost-net this means taking packets from the tx virtqueue and transmitting them over the tap file descriptor.
+>
+> ## Vhost as a userspace interface
+>
+> When a guest kicks the host because it has placed buffers onto a virtqueue, there needs to be a way to signal the vhost worker thread that there is work to do. Since vhost does not depend on the KVM kernel module they cannot communicate directly. Instead vhost instances are set up with an eventfd file descriptor which the vhost worker thread watches for activity. The KVM kernel module has a feature known as ioeventfd for taking an eventfd and hooking it up to a particular guest I/O exit. QEMU userspace registers an ioeventfd for the VIRTIO_PCI_QUEUE_NOTIFY hardware register access which kicks the virtqueue (When the guest writes to the virtqueue kick hardware register the kvm.ko module signals the ioeventfd which the main loop thread is monitoring). This is how the vhost worker thread gets notified by the KVM kernel module when the guest kicks the virtqueue.
