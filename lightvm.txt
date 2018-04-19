@@ -3,7 +3,6 @@
 
 lightvm can benefit the memory footprint in PLOVER. The background processes in kernel can contribute around one thousand dirty memory pages in virtual machine. With lightvm, this part of memory footprint can be further reduced.
 
-
 Besides, I think the fast pause/resume of lightvm is an exciting feature to PLOVER. We found the basic virtual machine fault tolerance system carried in QEMU spends a lot of time pausing the VM, and the reason is when QEMU issues vcpu related system calls, the KVM code in kernel will always do the operation of tracking the pid of the task that runs the vcpu first and this causes time cost due to synchronization if one CPU is modified by another CPU. Since kernel tracks the pid only for the purpose of yielding, so actually we only need to track the pid only when QEMU issues the vcpu running system call (KVM_SET_REGS, KVM_RUN).
 
 
@@ -76,3 +75,16 @@ With this in place, migration begins by chaos opening a TCP connection to a migr
 Next, to suspend the guest, chaos issues an ioctl to the sysctl back-end, which will set a field in the shared page to denote that the shutdown reason is suspend, and triggers the event channel. The front-end will receive the request to shutdown, upon which the guest will save its internal state and unbind noxs-related event channels and device pages.
 
 Once the guest is suspended we rely on libxc code to send the guest data to the remote host.
+
+9. What about vMigrater?
+
+In the normal case, when the disk I/O job request finishes, the program will do some simple computation and then issue the next I/O request.
+
+However, when there is mixed computation and disk I/O on a virtual CPU, the computation part will use up the time slice of the CPU, causing the virtual CPU to be de-scheduled by the hypervisor. This leads to a severe I/O inactivity in virtual machine because after the vCPU is de-scheduled, the I/O jobs running on this vCPU cannot be handled in time.
+
+What makes this worse is that this I/O inactivity problem causes the I/O scheduler running in the host machine work poorly. The Completely Fair Queuing (CFQ) I/O Scheduler is currently the default I/O scheduler in Linux. With CFQ, each process is assigned its own queue, and each queue is assigned timeslice. The I/O scheduler visits each queue in a round-robin fashion, servicing requests from the queue until the queue's timeslice is exhausted, or until no more requests remain. In the latter case, the CFQ I/O Scheduler will then idle for a brief period - by default, 10ms - waiting for a new request on the queue. If the anticipation pays off, the I/O scheduler avoids seeking. If not, the waiting was in vain, and the scheduler moves on to the next process's queue.
+
+However, since in the I/O inactivity scenario, the virtual CPU running the I/O job has been de-scheduled so that the next I/O request cannot be issued, the CFQ I/O scheduler will always waste time in waiting.
+
+The basic idea vMigrater is to migrate the thread running the mixed computation and I/O workload to an available virtual CPU when it has almost finished using up its time slice.
+
