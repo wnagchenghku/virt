@@ -1,6 +1,5 @@
 ﻿1. lightvm can greatly benefit our VM fault tolerance system PLOVER.
 
-
 lightvm can benefit the memory footprint in PLOVER. The background processes in kernel can contribute around one thousand dirty memory pages in virtual machine. With lightvm, this part of memory footprint can be further reduced.
 
 Besides, I think the fast pause/resume of lightvm is an exciting feature to PLOVER. We found the basic virtual machine fault tolerance system carried in QEMU spends a lot of time pausing the VM, and the reason is when QEMU issues vcpu related system calls, the KVM code in kernel will always do the operation of tracking the pid of the task that runs the vcpu first and this causes time cost due to synchronization if one CPU is modified by another CPU. Since kernel tracks the pid only for the purpose of yielding, so actually we only need to track the pid only when QEMU issues the vcpu running system call (KVM_SET_REGS, KVM_RUN).
@@ -17,7 +16,6 @@ I have only played with the Xen fault tolerance systems including  COLO, which i
 
 3. Tell me about your research.
 
-
 I was previously working on virtual machine fault tolerance systems, PLOVER. PLOVER can efficiently replicate virtual machine with strong fault tolerance guarantee. Specifically, it models the virtual machine as state machine by running the primary virtual machine and backup virtual machine in parallel and ensuring both virtual machines receive the same total order of network inputs.
 
 
@@ -29,15 +27,22 @@ To achieve strong fault tolerance guarantee, it adds a witness machine to form a
 
 The main idea is what I have mentioned above. But there are some practical challenges in PLOVER, like how to achieve network input consensus in the hypervisor without hurting the virtual machine's performance and how to maximize the same dirty memory pages between two VMs, etc.
 
+The other virtual machine project which I was involved is about virtual machine CPU scheduling. Yesterday, USENIX ATC has announced the acceptance of our our paper.
+
+In virtual machine, due to virtual CPU scheduling, there are problems in I/O job scheduling. Specifically, when there is mixed computation and disk I/O running on a virtual CPU, the computation part will use up the time slice of the CPU, causing the virtual CPU to be de-scheduled by the hypervisor. This leads to a severe I/O inactivity in virtual machine because after the vCPU is de-scheduled, the I/O jobs running on this vCPU cannot be handled in time. This means, after an I/O request finishes, the program is not able to handle it and issue the next I/O request, causing I/O inactivity.
+
+What makes this worse is that this I/O inactivity problem causes the I/O scheduler running in the host machine work poorly. The Completely Fair Queuing (CFQ) I/O Scheduler is currently the default I/O scheduler in Linux. With CFQ, each process is assigned its own queue, and each queue is assigned timeslice. The I/O scheduler visits each queue in a round-robin fashion, servicing requests from the queue until the queue's timeslice is exhausted, or until no more requests remain. In the latter case, the CFQ I/O Scheduler will then idle for a brief period - by default, 10ms - waiting for a new request on the queue. If the anticipation pays off, the I/O scheduler avoids seeking. If not, the waiting was in vain, and the scheduler moves on to the next process's queue.
+
+However, since in the I/O inactivity scenario, the virtual CPU running the I/O job has been de-scheduled so that the next I/O request cannot be issued, the CFQ I/O scheduler will always waste time in waiting.
+
+The basic idea vMigrater is to migrate the thread running the mixed computation and I/O workload to an available virtual CPU when it has almost finished using up its time slice.
 
 4. Why do you apply for NEC
-
 
 I applied for NEC for two reasons. I was attracted by the great works like lightvm at the top conferences. I was previously working the virtual machine fault tolerance projects, but with the focus on virtual machine migration technologies and distributed consensus protocols which are mainly on top of the virtual machine itself, therefore I am expecting to come to NEC Europe to get a deeper understanding on the internal mechanism of virtual machine.
 
 
 The second reason is that I am actually planning the whole career of my life. I spent half a year working as an intern in Hamburg three years ago, and I really enjoyed that time. After that I have made up my mind to immigrate to Germany and find a job there after graduation. So if I am qualified, I will join NEC as a researcher after my graduation.
-
 
 5. Duration of internship
 
@@ -76,15 +81,45 @@ Next, to suspend the guest, chaos issues an ioctl to the sysctl back-end, which 
 
 Once the guest is suspended we rely on libxc code to send the guest data to the remote host.
 
-9. What about vMigrater?
+10. lightvm brief
 
-In the normal case, when the disk I/O job request finishes, the program will do some simple computation and then issue the next I/O request.
+Goal​ : make VMs light and as fast as containers, while providing stronger isolation
+- Fast instantiation
+- High Instance Density
+- Quick pause/unpause
+- Small memory and on-disk footprint
+Based on Xen
+Lightweight tool stack
+Modifies Xen’s control plane
 
-However, when there is mixed computation and disk I/O on a virtual CPU, the computation part will use up the time slice of the CPU, causing the virtual CPU to be de-scheduled by the hypervisor. This leads to a severe I/O inactivity in virtual machine because after the vCPU is de-scheduled, the I/O jobs running on this vCPU cannot be handled in time.
+11. Tinyx
+How to achieve this idea: ​ Tinyx​ , a tool that generates a unikernel for a given application.
 
-What makes this worse is that this I/O inactivity problem causes the I/O scheduler running in the host machine work poorly. The Completely Fair Queuing (CFQ) I/O Scheduler is currently the default I/O scheduler in Linux. With CFQ, each process is assigned its own queue, and each queue is assigned timeslice. The I/O scheduler visits each queue in a round-robin fashion, servicing requests from the queue until the queue's timeslice is exhausted, or until no more requests remain. In the latter case, the CFQ I/O Scheduler will then idle for a brief period - by default, 10ms - waiting for a new request on the queue. If the anticipation pays off, the I/O scheduler avoids seeking. If not, the waiting was in vain, and the scheduler moves on to the next process's queue.
+Tinyx is an automated build system that creates minimalistic Linux VM images targeted at
+running a single application (although the system supports having multiple ones)
 
-However, since in the I/O inactivity scenario, the virtual CPU running the I/O job has been de-scheduled so that the next I/O request cannot be issued, the CFQ I/O scheduler will always waste time in waiting.
+The Tinyx build system takes two inputs: an application to build the image for (e.g., nginx) and
+the platform the image will be running on (e.g., a Xen VM)
 
-The basic idea vMigrater is to migrate the thread running the mixed computation and I/O workload to an available virtual CPU when it has almost finished using up its time slice.
+To derive dependencies, Tinyx uses (1) objdump to generate a list of libraries and (2) the Debian
+package manager
+
+- For example, running objdump -x /bin/bash shows:
+  "...
+  Dynamic Section:
+     NEEDED    libtinfo.so.5
+     NEEDED    libdl.so.2
+     NEEDED    libc.so.6
+ .."
+
+Tinyx first mounts an empty OverlayFS directory over a Debian minimal debootstrap system. In this mounted directory we install the minimal set of packages discovered earlier as would be normally done in Debian. Since this is done on an overlay mounted system, unmounting this overlay gives us all the files which are properly configured as they would be on a Debian system.
+
+
+> Overlay FS
+
+OverlayFS layers two directories on a single Linux host and presents them as a single directory. These directories are called layers and the unification process is referred to a a union mount. OverlayFS refers to the lower directory as lowerdir and the upper directory a upperdir. The unified view is exposed through its own directory called merged.
+
+The diagram below shows how a Docker image and a Docker container are layered. The image layer is the lowerdir and the container layer is the upperdir. The unified view is exposed through a directory called merged which is effectively the containers mount point. The diagram shows how Docker constructs map to OverlayFS constructs.
+
+Where the image layer and the container layer contain the same files, the container layer “wins” and obscures the existence of the same files in the image layer.
 
