@@ -2,14 +2,13 @@
 
 lightvm can benefit the memory footprint in PLOVER. The background processes in kernel can contribute around one thousand dirty memory pages in virtual machine. With lightvm, this part of memory footprint can be further reduced.
 
-Besides, I think the fast pause/resume of lightvm is an exciting feature to PLOVER. We found the basic virtual machine fault tolerance system carried in QEMU spends a lot of time pausing the VM, and the reason is when QEMU issues vcpu related system calls, the KVM code in kernel will always do the operation of tracking the pid of the task that runs the vcpu first and this causes time cost due to synchronization if one CPU is modified by another CPU. Since kernel tracks the pid only for the purpose of yielding, so actually we only need to track the pid only when QEMU issues the vcpu running system call (KVM_SET_REGS, KVM_RUN).
+Besides, I think the quick pause/resume of lightvm is an exciting feature to PLOVER. We found the basic virtual machine fault tolerance system carried in QEMU spends a lot of time pausing the VM, and the reason is when QEMU issues vcpu related system calls (like to set the vcpu registers or ask the virtual cpu to run), the KVM code in kernel will always do the operation of tracking the pid of the task that runs the vcpu first and this causes time cost due to synchronization if one CPU is modified by another CPU. Since kernel tracks the pid only for the purpose of yielding, so actually we only need to track the pid only when QEMU issues asks the virtual cpu to run.
 
+So the pausing time is a little bit linear with the number of virtual CPUs.
 
-This bug has been fixed on ubuntu 16, but we were using ubuntu 14. Therefore, it takes us a lot of time to find the root cause. With lightvm, I think this kind of problem can be mitigated.
-
+We spent a lot of time debugging this and later we found it has been fixed in Ubuntu 16. So with lightvm, I think this kind of problem can be mitigated.
 
 2. What do you know about Xen?
-
 
 I have only played with the Xen fault tolerance systems including  COLO, which is a virtual machine fault tolerance system developed by Huawei, and Remus. So, I am quite familiar with the virtual machine migration protocol in Xen, but for the internal mechanism of Xen, I may need to have a deep understanding. And that's why I applied for your internship because I am expecting to have a deeper understanding on virtualization technology.
 
@@ -18,18 +17,16 @@ I have only played with the Xen fault tolerance systems including  COLO, which i
 
 I was previously working on virtual machine fault tolerance systems, PLOVER. PLOVER can efficiently replicate virtual machine with strong fault tolerance guarantee. Specifically, it models the virtual machine as state machine by running the primary virtual machine and backup virtual machine in parallel and ensuring both virtual machines receive the same total order of network inputs.
 
-
 Because the primary and backup run the same code, receive the same network inputs, their memory states should be almost the same and accordingly the amount of data to be transferred for memory state synchronization is very small.
-
 
 To achieve strong fault tolerance guarantee, it adds a witness machine to form a Paxos group.
 
 
 The main idea is what I have mentioned above. But there are some practical challenges in PLOVER, like how to achieve network input consensus in the hypervisor without hurting the virtual machine's performance and how to maximize the same dirty memory pages between two VMs, etc.
 
-The other virtual machine project which I was involved is about virtual machine CPU scheduling. Yesterday, USENIX ATC has announced the acceptance of our our paper.
+The other virtual machine project which I was involved is about virtual machine CPU scheduling. Yesterday, our our paper is accepted by this year's USENIX ATC.
 
-In virtual machine, due to virtual CPU scheduling, there are problems in I/O job scheduling. Specifically, when there is mixed computation and disk I/O running on a virtual CPU, the computation part will use up the time slice of the CPU, causing the virtual CPU to be de-scheduled by the hypervisor. This leads to a severe I/O inactivity in virtual machine because after the vCPU is de-scheduled, the I/O jobs running on this vCPU cannot be handled in time. This means, after an I/O request finishes, the program is not able to handle it and issue the next I/O request, causing I/O inactivity.
+In virtual machine, the virtual CPU scheduling could cause problems in disk I/O scheduling. Specifically, when there is mixed computation and disk I/O running on a virtual CPU, the computation part will use up the time slice of the CPU, causing the virtual CPU to be de-scheduled by the hypervisor. This leads to a severe I/O inactivity in virtual machine because after the vCPU is de-scheduled, the I/O requests running on this vCPU cannot be handled in time. This means, after an I/O request is finished, the program is not able to handle it and issue the next I/O request, causing I/O inactivity.
 
 What makes this worse is that this I/O inactivity problem causes the I/O scheduler running in the host machine work poorly. The Completely Fair Queuing (CFQ) I/O Scheduler is currently the default I/O scheduler in Linux. With CFQ, each process is assigned its own queue, and each queue is assigned timeslice. The I/O scheduler visits each queue in a round-robin fashion, servicing requests from the queue until the queue's timeslice is exhausted, or until no more requests remain. In the latter case, the CFQ I/O Scheduler will then idle for a brief period - by default, 10ms - waiting for a new request on the queue. If the anticipation pays off, the I/O scheduler avoids seeking. If not, the waiting was in vain, and the scheduler moves on to the next process's queue.
 
@@ -41,22 +38,18 @@ The basic idea vMigrater is to migrate the thread running the mixed computation 
 
 I applied for NEC for two reasons. I was attracted by the great works like lightvm at the top conferences. Because I am also working on virtual machine related projects, but with a focus on the virtual machine migration protocol and virtual machine CPU and disk I/O scheduling. I expect to come to NEC to get a deeper understanding on virtual machine.
 
-The second reason is that I am actually planning the whole career of my life. I spent half a year working as an intern in Hamburg three years ago, and I really enjoyed that time. After that I have made up my mind to immigrate to Germany and find a job there after graduation. So if I am qualified, I will join NEC as a researcher after my graduation.
+The second reason is that I am actually planning the whole career of my life. I spent half a year working as an intern in Hamburg three years ago, and I really enjoyed that time. After that I have made up my mind to find a job in Germany and immigrate after graduation. So if I am qualified, I will join NEC as a researcher after my graduation.
 
 5. Duration of internship
 
-
-I think this is really negotiable. I have told this internship to my supervisor and he really values this opportunity and wants me to go there. He said if I am working on like an NSDI or Eurosys paper whose deadlines are in September or October, then my internship duration can be extended to the end of October.
-
+I think this is negotiable. I have told this internship to my supervisor and he really values this opportunity and wants me to go there. He said if I am working on like an NSDI or Eurosys paper whose deadlines are in September or October, then my internship can be extended to the end of October.
 
 6. container is less isolated than VM
-
 
 To complicate things matter, any container that can monopolize or exhaust system resources (e.g., memory, file descriptors, user IDs, forkbombs) will cause a DoS attack on all other containers on that host.
 
 
 forkbomb: fork炸弹以极快的速度创建大量进程（进程数呈以2为底数的指数增长趋势），并以此消耗系统分配予进程的可用空间使进程表饱和，而系统在进程表饱和后就无法运行新程序，除非进程表中的某一进程终止；但由于fork炸弹程序所创建的所有实例都会不断探测空缺的进程槽并尝试取用以创建新进程，因而即使在某进程终止后也基本不可能运行新进程。fork炸弹生成的子程序在消耗进程表空间的同时也会占用CPU和内存，从而导致系统与现有进程运行速度放缓，响应时间也会随之大幅增加，以致于无法正常完成任务，从而使系统的正常运作受到严重影响。
-
 
 All containers share the kernel and its API. Kernel API are difficult to secure. One container uses the system call which is not protected securely, the whole system is in danger.
 
@@ -89,7 +82,7 @@ Goal​ : make VMs light and as fast as containers, while providing stronger iso
 - Small memory and on-disk footprint
 Based on Xen
 Lightweight tool stack
-Modifies Xen’s control plane
+Modifies Xen's control plane
 
 11. Tinyx
 How to achieve this idea: ​ Tinyx​ , a tool that generates a unikernel for a given application.
@@ -122,3 +115,13 @@ The diagram below shows how a Docker image and a Docker container are layered. T
 
 Where the image layer and the container layer contain the same files, the container layer “wins” and obscures the existence of the same files in the image layer.
 
+12. Unikraft
+
+The potential of unikernels is great (as you can see from the work above), but there hasnâ€™t been a massive adoption of unikernels. Why? Development time.Â  For example, developing Minipython, a MicroPython unikernel, took the better part of three months to put together and test. ClickOS, a unikernel for NFV, was the result of a couple of years of work.
+
+Unikraft decomposes operating systems into elementary pieces called libraries (e.g., schedulers, memory allocators, drivers, filesystems, network stacks, etc.) that users can then pick and choose from, using a menu to quickly build images tailored to the needs of specific applications.
+
+
+    Library pools contain libraries that the user of Unikraft can select from to create the unikernel. From the bottom up, library pools are organized into (1) the architecture library tool, containing libraries specific to a computer architecture (e.g., x86_64, ARM32 or MIPS); (2) the platform tool, where target platforms can be Xen, KVM, bare metal (i.e. no virtualization), user-space Linux and potentially even containers; and (3) the main library pool, containing a rich set of functionality to build the unikernel. This last library includes drivers (both virtual such as netback/netfront and physical such as ixgbe), filesystems, memory allocators, schedulers, network stacks, standard libs (e.g. libc, openssl, etc.), and runtimes (e.g. a Python interpreter and debugging and profiling tools). These pools of libraries constitute a codebase for creating unikernels. As shown, a library can be relatively large (e.g libc) or quite small (a scheduler), which allows for customization for the unikernel.
+
+    The Unikraft build tool is in charge of compiling the application and the selected libraries together to create a binary for a specific platform and architecture (e.g., Xen on x86_64). The tool is currently inspired by Linuxâ€™s KCONFIG system and consists of a set of Makefiles. It allows users to select libraries, to configure them, and to warn them when library dependencies are not met. In addition, the tool can also simultaneously generate binaries for multiple platforms.
