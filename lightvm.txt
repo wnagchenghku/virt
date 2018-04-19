@@ -39,8 +39,7 @@ The basic idea vMigrater is to migrate the thread running the mixed computation 
 
 4. Why do you apply for NEC
 
-I applied for NEC for two reasons. I was attracted by the great works like lightvm at the top conferences. I was previously working the virtual machine fault tolerance projects, but with the focus on virtual machine migration technologies and distributed consensus protocols which are mainly on top of the virtual machine itself, therefore I am expecting to come to NEC Europe to get a deeper understanding on the internal mechanism of virtual machine.
-
+I applied for NEC for two reasons. I was attracted by the great works like lightvm at the top conferences. Because I am also working on virtual machine related projects, but with a focus on the virtual machine migration protocol and virtual machine CPU and disk I/O scheduling. I expect to come to NEC to get a deeper understanding on virtual machine.
 
 The second reason is that I am actually planning the whole career of my life. I spent half a year working as an intern in Hamburg three years ago, and I really enjoyed that time. After that I have made up my mind to immigrate to Germany and find a job there after graduation. So if I am qualified, I will join NEC as a researcher after my graduation.
 
